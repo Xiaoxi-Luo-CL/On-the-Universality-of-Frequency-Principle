@@ -1,0 +1,22 @@
+# slurm
+*.err
+*.out
+*.share
+/ckpt
+/figure
+/wandb
+/surprisal_result
+requirements.txt
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+
+# dataset
+dataset/
+cifar-10-batches-py/
+
+# results
+1d-runs/
+nd-runs/
