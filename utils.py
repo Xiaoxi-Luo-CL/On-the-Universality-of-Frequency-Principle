@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import random
+import argparse
+import yaml
 
 
 def create_save_dir(folder=''):
@@ -106,3 +108,32 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def load_config():
+    parser = argparse.ArgumentParser(
+        description="Spectral Bias NLP Experiment")
+    parser.add_argument(
+        "--config", type=str, default="nlp-config.yaml", help="Path to YAML config file")
+    parser.add_argument("--epochs", type=int,
+                        help="Override number of training epochs")
+    parser.add_argument("--lr", type=float, help="Override learning rate")
+    parser.add_argument("--sample_docs", type=int,
+                        help="Override number of sampled documents")
+    parser.add_argument("--ngrams_per_doc", type=int,
+                        help="Override n-grams per document")
+    args = parser.parse_args()
+
+    with open(args.config, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    if args.epochs is not None:
+        cfg["training"]["epochs"] = args.epochs
+    if args.lr is not None:
+        cfg["training"]["lr"] = args.lr
+    if args.sample_docs is not None:
+        cfg["dataset"]["num_docs"] = args.sample_docs
+    if args.ngrams_per_doc is not None:
+        cfg["dataset"]["ngrams_per_doc"] = args.ngrams_per_doc
+
+    return cfg

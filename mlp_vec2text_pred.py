@@ -7,50 +7,21 @@
 # * Filtering method analysis (frequency decomposition via Gaussian kernel)
 # ==========================================================
 
+from typing import List, Tuple
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, random_split
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 from datasets import load_dataset, DatasetDict
 from tqdm import tqdm
 import gensim.downloader as api
 import re
-import argparse
-import yaml
-import random
+import wandb
 from typing import Union
 import os
 import json
-from utils import get_act_func, create_save_dir, set_seed
-
-
-def load_config():
-    parser = argparse.ArgumentParser(
-        description="Spectral Bias NLP Experiment")
-    parser.add_argument(
-        "--config", type=str, default="nlp-config.yaml", help="Path to YAML config file")
-    parser.add_argument("--epochs", type=int,
-                        help="Override number of training epochs")
-    parser.add_argument("--lr", type=float, help="Override learning rate")
-    parser.add_argument("--sample_docs", type=int,
-                        help="Override number of sampled documents")
-    parser.add_argument("--ngrams_per_doc", type=int,
-                        help="Override n-grams per document")
-    args = parser.parse_args()
-
-    with open(args.config, "r") as f:
-        cfg = yaml.safe_load(f)
-
-    if args.epochs is not None:
-        cfg["training"]["epochs"] = args.epochs
-    if args.lr is not None:
-        cfg["training"]["lr"] = args.lr
-    if args.sample_docs is not None:
-        cfg["dataset"]["num_docs"] = args.sample_docs
-    if args.ngrams_per_doc is not None:
-        cfg["dataset"]["ngrams_per_doc"] = args.ngrams_per_doc
-
-    return cfg
+from utils import get_act_func, create_save_dir, set_seed, load_config, plot_diff_distr
 
 
 # Load WikiText, build n-gram dataset and dataloader -----------------
@@ -100,6 +71,7 @@ class SampledNgramDataset(Dataset):
                 targets = targets[mask]
             ngrams_ls.append(ngrams)
             targets_ls.append(targets)
+
         self.ngrams = np.vstack(ngrams_ls)
         self.targets = np.hstack(targets_ls)
         assert self.ngrams.shape[0] == self.targets.shape[0]
@@ -111,6 +83,17 @@ class SampledNgramDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.ngrams[idx], self.targets[idx]
+
+    def select(self, indices: np.ndarray):
+        """Return a new dataset that is a subset of the current one."""
+        new_ds = SampledNgramDataset.__new__(SampledNgramDataset)
+
+        new_ds.word2id = self.word2id
+        new_ds.n = self.n
+
+        new_ds.ngrams = self.ngrams[indices]
+        new_ds.targets = self.targets[indices]
+        return new_ds
 
 
 def tokenize(text: str):
@@ -125,20 +108,21 @@ class NgramMLP(nn.Module):
         super().__init__()
         act_fn = get_act_func(activation.lower())
         self.embed = nn.Embedding.from_pretrained(
-            torch.tensor(embedding_matrix, dtype=torch.float32), freeze=True
+            embedding_matrix.detach().clone(), freeze=True
         )
-        input_dim = (n - 1) * embedding_matrix.shape[1]
+        input_dim = n * embedding_matrix.shape[1]
 
         layers = []
         last_dim = input_dim
         for h in hidden_dims:
             layers += [nn.Linear(last_dim, h), act_fn]
             last_dim = h
-        layers += [nn.Linear(last_dim, output_dim), nn.Softmax(dim=-1)]
+        layers += [nn.Linear(last_dim, output_dim)]
+        #    nn.Softmax(dim=-1)
         self.net = nn.Sequential(*layers)
 
     def forward(self, input_ids):
-        embeds = self.embed(input_ids)  # [B, n-1, dim]
+        embeds = self.embed(input_ids)  # [B, n, dim]
         x = embeds.view(embeds.size(0), -1)
         return self.net(x)
 
@@ -152,73 +136,128 @@ def train_epoch(model, loader, loss_fn, optimizer, device):
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
         y_hat = model(x)
-        from IPython import embed
-        embed()
-        loss = loss_fn(y_hat, y)
+        loss = loss_fn(torch.log(y_hat), y)
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * x.size(0)
     return total_loss / len(loader.dataset)
 
 
-def eval_epoch(model, loader, loss_fn, device):
+def eval_loader(model, loader, loss_fn, device, return_outputs=False):
+    '''Evaluate model on given dataloader.'''
     model.eval()
-    total_loss = 0
+    if return_outputs:
+        all_outputs = []
+    else:
+        total_loss = 0
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             y_hat = model(x)
-            loss = loss_fn(y_hat, y)
-            total_loss += loss.item() * x.size(0)
+            if return_outputs:
+                all_outputs.append(y_hat.detach().cpu())
+            else:
+                loss = loss_fn(y_hat, y)
+                total_loss += loss.item() * x.size(0)
+    if return_outputs:
+        return torch.cat(all_outputs, dim=0)
     return total_loss / len(loader.dataset)
 
 
 # Filtering Method Components -------------------------
-
-def compute_distance_matrix(embeddings, metric="euclidean"):
-    """Compute pairwise distance matrix for input embeddings. Default metric is Euclidean."""
+def compute_distance_matrix(embeddings: torch.Tensor, metric: str = "euclidean") -> torch.Tensor:
+    """
+    Compute pairwise distance matrix for embeddings.
+    Args:
+        embeddings (torch.Tensor): Tensor of shape (N, D)
+        metric (str): "euclidean" or "cosine"
+    Returns:
+        torch.Tensor: Pairwise distance matrix of shape (N, N)
+    """
     X = embeddings
     if metric == "euclidean":
-        dist = -2 * np.dot(X, X.T) + np.sum(X**2,
-                                            axis=1)[:, None] + np.sum(X**2, axis=1)
-        return dist
+        # dist_ij = ||x_i||^2 + ||x_j||^2 - 2 * x_i @ x_j
+        x2 = (X ** 2).sum(dim=1, keepdim=True)   # (N, 1)
+        dist = x2 + x2.T - 2 * (X @ X.T)
+        return dist.clamp_min(0.0)
+
     elif metric == "cosine":
-        norm = np.linalg.norm(X, axis=1, keepdims=True)
-        Xn = X / (norm + 1e-8)
-        sim = np.dot(Xn, Xn.T)
+        # Normalize rows to unit length
+        Xn = X / (X.norm(dim=1, keepdim=True) + 1e-8)
+        sim = Xn @ Xn.T
         return 1 - sim
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
 
-def normal_kernel(dist, filter_dict):
+def normal_kernel(dist, filter_var: list):
     """Construct normalized Gaussian kernels for each filter value."""
-    kernel_dict = []
-    for f in filter_dict:
-        kernel = np.exp(-dist / (2 * f))
-        mean = np.sum(kernel, axis=1, keepdims=True)
-        kernel_dict.append(kernel / mean)
-    return kernel_dict
+    kernel_ls = []
+    for var in filter_var:
+        kernel = torch.exp(-dist / (2 * var))
+        mean = torch.sum(kernel, dim=1, keepdim=True)
+        kernel_ls.append(kernel / mean)
+    return kernel_ls
 
 
-def gaussian_filter(f_orig, kernel):
-    """Apply Gaussian filter to given signal or embedding set."""
-    return np.matmul(kernel, f_orig)
+def gaussian_filter_label(kernel: torch.Tensor, labels: torch.Tensor, vocab_size: int) -> torch.Tensor:
+    """
+    Compute K @ one_hot(labels) without forming the one-hot explicitly.
+    Args:
+        kernel: torch.Tensor, shape (N, N)
+        labels: torch.LongTensor, shape (N,)
+        vocab_size: int, V
+    Returns:
+        f_low: torch.Tensor, shape (N, V), where
+               f_low[i, j] = sum_{p: labels[p]==j} kernel[i, p]
+    """
+    assert kernel.dim() == 2 and kernel.size(
+        0) == kernel.size(1), "kernel must be (N,N)"
+    N = kernel.size(0)
+
+    # idx: shape (N, N), idx[a, b] = labels[b]
+    # labels.unsqueeze(0) -> shape (1, N); expand -> (N, N)
+    idx = labels.unsqueeze(0).expand(N, -1)
+
+    # f_low: (N, V), scatter_add along dim=1: a,b -> f_low[a, idx[a,b]] += kernel[a,b]
+    f_low = torch.zeros((N, vocab_size))
+    f_low.scatter_add_(1, idx, kernel)
+    return f_low
 
 
-def get_freq_low_high(yy, kernel_dict):
-    """Decompose signals into low and high frequency components."""
-    f_low, f_high = [], []
-    for kernel in kernel_dict:
-        f_new = gaussian_filter(yy, kernel)
-        f_low.append(f_new)
-        f_high.append(yy - f_new)
-    return f_low, f_high
+def get_freq_low_high(kernel_list: List[torch.Tensor], y: torch.Tensor, vocab_size: int, label=True):
+    """
+    For a list of kernels (each (N,N)), compute low/high freq components for labels.
+    Returns lists f_low_ls, f_high_ls where each element shape is (N, V).
+    """
+    f_low_ls, f_high_ls = [], []
+    if label:
+        y = F.one_hot(y.long(), num_classes=vocab_size).float()  # (N, V)
+    for kernel in kernel_list:
+        f_low = torch.matmul(kernel, y)  # (N, V)
+        f_high = y - f_low
+        f_low_ls.append(f_low)
+        f_high_ls.append(f_high)
+
+    return f_low_ls, f_high_ls
+
+
+def sampled_dataset_to_distance(ngram_set: SampledNgramDataset, embedding: torch.Tensor, sample=10000) -> Tuple[torch.Tensor, SampledNgramDataset, torch.Tensor]:
+    """For a NgramDataset, sample some of them for computing the distance matrix. Convert labels to one-hot vectors."""
+    train_indices = np.random.choice(
+        len(ngram_set), size=min(len(ngram_set), sample), replace=False)
+    sampled_ngram = ngram_set.select(train_indices)
+
+    sampled_ngram_flat = embedding[sampled_ngram.ngrams].reshape(
+        sampled_ngram.ngrams.shape[0], -1)
+    dist = compute_distance_matrix(sampled_ngram_flat, metric="euclidean")
+    return dist, sampled_ngram, torch.Tensor(sampled_ngram.targets)
 
 
 # Main -----------------------------------------------------
 
 def main():
+    # wandb.init(project='spectral-nlp', name=f'mlp-try', resume='allow')
     cfg = load_config()
     seed = cfg["training"]["seed"]
     set_seed(seed)
@@ -242,14 +281,26 @@ def main():
     dataset = load_wikitext(num_doc=cfg["dataset"]["num_docs"])
 
     train_dataset = SampledNgramDataset(
-        dataset['train'], word2id, n=cfg['dataset']['ngram'])
+        dataset['train'], word2id, n=cfg['dataset']['ngram'], remove_unk=False)
     train_loader = DataLoader(
         train_dataset, batch_size=cfg["training"]["batch_size"], shuffle=True)
 
     test_dataset = SampledNgramDataset(
-        dataset['test'], word2id, n=cfg['dataset']['ngram'])
+        dataset['test'], word2id, n=cfg['dataset']['ngram'], remove_unk=False)
     test_loader = DataLoader(
         test_dataset, batch_size=cfg["training"]["batch_size"], shuffle=False)
+
+    # 3. Compute frequency information for target labels
+    filter_num = cfg['spectral']['filter_num']
+    filter_var = np.linspace(
+        cfg['spectral']['filter_start'], cfg['spectral']['filter_end'], filter_num)
+    dist, sampled_ngram_dataset, sampled_f_label = sampled_dataset_to_distance(
+        train_dataset, embedding_matrix, sample=10000)
+    sampled_loader = DataLoader(
+        sampled_ngram_dataset, batch_size=cfg["training"]["batch_size"], shuffle=False)
+    kernel_ls = normal_kernel(dist, filter_var)
+    f_low, f_high = get_freq_low_high(
+        kernel_ls, sampled_f_label, len(vocab), label=True)
 
     # 4. Define model
     model = NgramMLP(
@@ -257,26 +308,61 @@ def main():
         hidden_dims=cfg["model"]["hidden_dims"],
         output_dim=len(vocab),
         activation=cfg["model"]["activation"],
-        n=cfg["dataset"]["ngram"]
-    ).to(device)
+        n=cfg["dataset"]["ngram"]).to(device)
 
-    loss_fn = nn.NLLLoss()
-    # optimizer = optim.Adam(model.parameters(), lr=cfg["training"]["lr"])
-    optimizer = torch.optim.SGD(model.parameters(), lr=cfg["training"]["lr"])
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(
+        model.parameters(), lr=float(cfg["training"]["lr"]))
 
     # 5. Training loop
+    model.train()
+    global_step = 0
+    lowdiff, highdiff = [[] * filter_num], [[] * filter_num]
+
     for epoch in range(cfg["training"]["epochs"]):
-        train_loss = train_epoch(
-            model, train_loader, loss_fn, optimizer, device)
-        test_loss = eval_epoch(model, test_loader, loss_fn, device)
+        epoch_loss = 0
+        for x, y in train_loader:
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            y_hat = model(x)
+            loss = loss_fn(y_hat, y)  # default reduction: mean
+            loss.backward()
+            optimizer.step()
+
+            # loss_ls.append(loss.item())
+            if global_step % 100 == 0:
+                print(f'Step {global_step}:', loss.item())
+                # wandb.log({'step_loss': loss.item()})
+
+            if global_step % cfg['spectral']['interval'] == 0:
+                y_pred = eval_loader(model, sampled_loader,
+                                     loss_fn, device, return_outputs=True)
+                assert isinstance(y_pred, torch.Tensor)
+                f_train_low, f_train_high = get_freq_low_high(
+                    kernel_ls, torch.softmax(y_pred, dim=-1), len(vocab))
+                for i in range(filter_num):
+                    lowdiff[i].append(np.linalg.norm(
+                        f_train_low[i] - f_low[i])/np.linalg.norm(f_low[i]))
+                    highdiff[i].append(np.linalg.norm(
+                        f_train_high[i] - f_high[i])/np.linalg.norm(f_high[i]))
+            global_step += 1
+            epoch_loss += loss.item() * x.size(0)
+
+        train_loss = epoch_loss / len(train_loader.dataset)  # type: ignore
+        test_loss = eval_loader(model, test_loader, loss_fn, device)
         print(
             f"[Epoch {epoch+1}/{cfg['training']['epochs']}] Train Loss={train_loss:.5f}, Test Loss={test_loss:.5f}")
 
     # 6. Save model & config
-    os.makedirs(os.path.dirname(cfg["output"]["save_path"]), exist_ok=True)
-    torch.save(model.state_dict(), cfg["output"]["save_path"])
-    print(f"Model saved to {cfg['output']['save_path']}!")
+    for filter_idx, filter in enumerate(filter_var):
+        lowdiff_ind, highdiff_ind = lowdiff[filter_idx], highdiff[filter_idx]
+        plot_diff_distr(filter, lowdiff_ind, highdiff_ind, current_run_path)
+    # torch.save(model.state_dict(), f'{current_run_path}/MLP_weight.pt')
+    # print(f"Model saved to {cfg['output']['save_path']}!")
+    # wandb.finish()
 
 
 if __name__ == "__main__":
+    current_run_path = create_save_dir(folder='NLP-runs')
+    print('Current run path: ', current_run_path)
     main()

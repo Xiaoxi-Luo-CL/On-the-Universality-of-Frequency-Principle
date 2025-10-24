@@ -3,12 +3,11 @@ dataset:
   ngram: 4
   train_ratio: 0.8
   num_docs: 100000          # number of randomly sampled documents
-  ngrams_per_doc: 10        # number of n-grams per document
+  ngrams_per_doc: 30        # number of n-grams per document
 
 embedding:
   name: "glove-wiki-gigaword-300"  # word2vec-google-news-300
   dim: 300
-  max_vocab: 50000
 
 model:
   hidden_dims: [1024, 1024, 2048]
@@ -17,9 +16,16 @@ model:
 training:
   batch_size: 256
   lr: 1e-3
-  epochs: 5
+  epochs: 10
   seed: 42
   device: "cuda"
+  wandb_log: 1
+
+spectral:
+  interval: 200
+  filter_start: 2
+  filter_end: 100
+  filter_num: 10
 
 output:
   save_path: "mlp_spectral_wikitext.pt"
