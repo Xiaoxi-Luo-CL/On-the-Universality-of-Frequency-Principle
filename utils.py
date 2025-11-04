@@ -93,11 +93,11 @@ def plot_loss(path, loss_train, x_log=False):
 
 
 def get_act_func(act_func):
-    if act_func == 'tanh':
+    if act_func.lower() == 'tanh':
         return torch.nn.Tanh()
-    elif act_func == 'ReLU':
+    elif act_func.lower() == 'relu':
         return torch.nn.ReLU()
-    elif act_func == 'Sigmoid':
+    elif act_func.lower() == 'sigmoid':
         return torch.nn.Sigmoid()
     else:
         raise NameError('No such act func!')
@@ -137,3 +137,62 @@ def load_config():
         cfg["dataset"]["ngrams_per_doc"] = args.ngrams_per_doc
 
     return cfg
+
+
+def load_spectral_npz(folder):
+    files = sorted([f for f in os.listdir(folder) if f.endswith(".npz")],
+                   key=lambda x: int(x.split("_")[-1].split(".npz")[0]))
+    lows, highs = [], []
+    for f in files:
+        data = np.load(os.path.join(folder, f))
+        lows.append(data['low'])
+        highs.append(data['high'])
+
+    return np.stack(lows), np.stack(highs)
+
+
+def calculate_norm(model):
+    grads = [
+        param.grad.detach().flatten()
+        for param in model.parameters()
+        if param.grad is not None
+    ]
+    norm = torch.cat(grads).norm()
+    return norm
+
+
+def relu(x):
+    return np.maximum(x, 0)
+
+
+def d_relu(x):
+    return 1.0 * (x > 0)
+
+
+def sin(x):
+    return np.sin(x)
+
+
+def cos(x):
+    return np.cos(x)
+
+
+def d_cos(x):
+    return -np.sin(x)
+
+
+def sigmoid(x):
+    return 1/(1 + np.exp(-x))
+
+
+def d_sigmoid(x):
+    s = sigmoid(x)
+    return s * (1 - s)
+
+
+def tanh(x):
+    return np.tanh(x)
+
+
+def d_tanh(x):
+    return 1.0 - np.tanh(x)**2

@@ -20,3 +20,5 @@ cifar-10-batches-py/
 # results
 1d-runs/
 nd-runs/
+NLP-runs/
+*.png

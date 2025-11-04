@@ -14,14 +14,15 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
 from datasets import load_dataset, DatasetDict
-from tqdm import tqdm
+from torch.optim.lr_scheduler import OneCycleLR
+import yaml
 import gensim.downloader as api
 import re
 import wandb
 from typing import Union
 import os
 import json
-from utils import get_act_func, create_save_dir, set_seed, load_config, plot_diff_distr
+from utils import get_act_func, create_save_dir, set_seed, load_config, plot_diff_distr, load_spectral_npz, calculate_norm
 
 
 # Load WikiText, build n-gram dataset and dataloader -----------------
@@ -149,19 +150,35 @@ def eval_loader(model, loader, loss_fn, device, return_outputs=False):
     if return_outputs:
         all_outputs = []
     else:
-        total_loss = 0
+        total_loss, total_acc = 0, 0
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             y_hat = model(x)
             if return_outputs:
-                all_outputs.append(y_hat.detach().cpu())
+                all_outputs.append(y_hat.detach())
             else:
                 loss = loss_fn(y_hat, y)
                 total_loss += loss.item() * x.size(0)
+                total_acc += (y_hat.argmax(dim=-1) == y).sum().item()
     if return_outputs:
         return torch.cat(all_outputs, dim=0)
-    return total_loss / len(loader.dataset)
+    return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
+
+
+def spectral_diff_training(f_low, f_high, f_train_low, f_train_high, step) -> Tuple[np.ndarray, np.ndarray]:
+    numer_low = torch.norm(f_train_low - f_low, dim=(1, 2))
+    denom_low = torch.norm(f_low, dim=(1, 2)) + 1e-8
+    numer_high = torch.norm(f_train_high - f_high, dim=(1, 2))
+    denom_high = torch.norm(f_high, dim=(1, 2)) + 1e-8
+
+    low_diff = (numer_low / denom_low).cpu().numpy()   # (K)
+    high_diff = (numer_high / denom_high).cpu().numpy()  # (K)
+    os.makedirs(os.path.join(current_run_path, "spectral_log"), exist_ok=True)
+
+    np.savez_compressed(f'{current_run_path}/spectral_log/step_{step}.npz',
+                        low=low_diff, high=high_diff)
+    return low_diff, high_diff
 
 
 # Filtering Method Components -------------------------
@@ -197,59 +214,36 @@ def normal_kernel(dist, filter_var: list):
         kernel = torch.exp(-dist / (2 * var))
         mean = torch.sum(kernel, dim=1, keepdim=True)
         kernel_ls.append(kernel / mean)
-    return kernel_ls
+    return torch.stack(kernel_ls, dim=0)
 
 
-def gaussian_filter_label(kernel: torch.Tensor, labels: torch.Tensor, vocab_size: int) -> torch.Tensor:
+def get_freq_low_high(kernel_stack: torch.Tensor, y: torch.Tensor, vocab_size: int, device, label=True) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute K @ one_hot(labels) without forming the one-hot explicitly.
-    Args:
-        kernel: torch.Tensor, shape (N, N)
-        labels: torch.LongTensor, shape (N,)
-        vocab_size: int, V
-    Returns:
-        f_low: torch.Tensor, shape (N, V), where
-               f_low[i, j] = sum_{p: labels[p]==j} kernel[i, p]
-    """
-    assert kernel.dim() == 2 and kernel.size(
-        0) == kernel.size(1), "kernel must be (N,N)"
-    N = kernel.size(0)
-
-    # idx: shape (N, N), idx[a, b] = labels[b]
-    # labels.unsqueeze(0) -> shape (1, N); expand -> (N, N)
-    idx = labels.unsqueeze(0).expand(N, -1)
-
-    # f_low: (N, V), scatter_add along dim=1: a,b -> f_low[a, idx[a,b]] += kernel[a,b]
-    f_low = torch.zeros((N, vocab_size))
-    f_low.scatter_add_(1, idx, kernel)
-    return f_low
-
-
-def get_freq_low_high(kernel_list: List[torch.Tensor], y: torch.Tensor, vocab_size: int, label=True):
-    """
-    For a list of kernels (each (N,N)), compute low/high freq components for labels.
+    Compute low/high freq components for labels.
+    kernel_stack: Tensor of shape (K, N, N)
     Returns lists f_low_ls, f_high_ls where each element shape is (N, V).
     """
-    f_low_ls, f_high_ls = [], []
     if label:
-        y = F.one_hot(y.long(), num_classes=vocab_size).float()  # (N, V)
-    for kernel in kernel_list:
-        f_low = torch.matmul(kernel, y)  # (N, V)
-        f_high = y - f_low
-        f_low_ls.append(f_low)
-        f_high_ls.append(f_high)
+        y = F.one_hot(y.long(),
+                      num_classes=vocab_size).float().to(device)  # (N, V)
+    f_low = torch.einsum('knm,mv->knv', kernel_stack, y)  # (K, N, V)
+    f_high = y.unsqueeze(0) - f_low  # (K, N, V)
+    # if label:
+    #     low_freq_ratio = torch.norm(f_low, dim=(1, 2)) / torch.norm(y)
+    #     print(low_freq_ratio)
+    #     from IPython import embed
+    #     embed()
+    return f_low, f_high
 
-    return f_low_ls, f_high_ls
 
-
-def sampled_dataset_to_distance(ngram_set: SampledNgramDataset, embedding: torch.Tensor, sample=10000) -> Tuple[torch.Tensor, SampledNgramDataset, torch.Tensor]:
+def sampled_dataset_to_distance(ngram_set: SampledNgramDataset, embedding: torch.Tensor, device, sample=10000) -> Tuple[torch.Tensor, SampledNgramDataset, torch.Tensor]:
     """For a NgramDataset, sample some of them for computing the distance matrix. Convert labels to one-hot vectors."""
     train_indices = np.random.choice(
         len(ngram_set), size=min(len(ngram_set), sample), replace=False)
     sampled_ngram = ngram_set.select(train_indices)
 
     sampled_ngram_flat = embedding[sampled_ngram.ngrams].reshape(
-        sampled_ngram.ngrams.shape[0], -1)
+        sampled_ngram.ngrams.shape[0], -1).to(device)
     dist = compute_distance_matrix(sampled_ngram_flat, metric="euclidean")
     return dist, sampled_ngram, torch.Tensor(sampled_ngram.targets)
 
@@ -257,7 +251,7 @@ def sampled_dataset_to_distance(ngram_set: SampledNgramDataset, embedding: torch
 # Main -----------------------------------------------------
 
 def main():
-    # wandb.init(project='spectral-nlp', name=f'mlp-try', resume='allow')
+    wandb.init(project='spectral-nlp', name=f'mlp-try', resume='allow')
     cfg = load_config()
     seed = cfg["training"]["seed"]
     set_seed(seed)
@@ -291,16 +285,21 @@ def main():
         test_dataset, batch_size=cfg["training"]["batch_size"], shuffle=False)
 
     # 3. Compute frequency information for target labels
+    print('Computing frequency components for target labels ...')
     filter_num = cfg['spectral']['filter_num']
-    filter_var = np.linspace(
-        cfg['spectral']['filter_start'], cfg['spectral']['filter_end'], filter_num)
+    if cfg['spectral']['scale'] == 'linear':
+        filter_var = np.linspace(
+            cfg['spectral']['filter_start'], cfg['spectral']['filter_end'], filter_num)
+    else:
+        filter_var = np.logspace(np.log10(cfg['spectral']['filter_start']),
+                                 np.log10(cfg['spectral']['filter_end']), filter_num)
     dist, sampled_ngram_dataset, sampled_f_label = sampled_dataset_to_distance(
-        train_dataset, embedding_matrix, sample=10000)
+        train_dataset, embedding_matrix, sample=cfg['spectral']['sample_size'], device=device)
     sampled_loader = DataLoader(
         sampled_ngram_dataset, batch_size=cfg["training"]["batch_size"], shuffle=False)
-    kernel_ls = normal_kernel(dist, filter_var)
+    kernel_stack = normal_kernel(dist, filter_var)  # (filter_num, N, N)
     f_low, f_high = get_freq_low_high(
-        kernel_ls, sampled_f_label, len(vocab), label=True)
+        kernel_stack, sampled_f_label, len(vocab), device, label=True)
 
     # 4. Define model
     model = NgramMLP(
@@ -311,15 +310,30 @@ def main():
         n=cfg["dataset"]["ngram"]).to(device)
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(
-        model.parameters(), lr=float(cfg["training"]["lr"]))
+    # optimizer = torch.optim.SGD(
+    #     model.parameters(), lr=float(cfg["training"]["lr"]))
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(cfg["training"]["lr"]),
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01
+    )
+    scheduler = OneCycleLR(
+        optimizer,
+        max_lr=1e-3,
+        steps_per_epoch=len(train_loader),
+        epochs=cfg["training"]["epochs"],
+        pct_start=0.1,
+        anneal_strategy='cos'
+    )
 
     # 5. Training loop
     model.train()
     global_step = 0
-    lowdiff, highdiff = [[] * filter_num], [[] * filter_num]
 
     for epoch in range(cfg["training"]["epochs"]):
+        print(f"--- Epoch {epoch+1}/{cfg['training']['epochs']} ---")
         epoch_loss = 0
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
@@ -328,38 +342,46 @@ def main():
             loss = loss_fn(y_hat, y)  # default reduction: mean
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
-            # loss_ls.append(loss.item())
             if global_step % 100 == 0:
                 print(f'Step {global_step}:', loss.item())
-                # wandb.log({'step_loss': loss.item()})
+                wandb.log({'step_loss': loss.item(),
+                          'grad_norm': calculate_norm(model)})
 
             if global_step % cfg['spectral']['interval'] == 0:
                 y_pred = eval_loader(model, sampled_loader,
                                      loss_fn, device, return_outputs=True)
                 assert isinstance(y_pred, torch.Tensor)
                 f_train_low, f_train_high = get_freq_low_high(
-                    kernel_ls, torch.softmax(y_pred, dim=-1), len(vocab))
-                for i in range(filter_num):
-                    lowdiff[i].append(np.linalg.norm(
-                        f_train_low[i] - f_low[i])/np.linalg.norm(f_low[i]))
-                    highdiff[i].append(np.linalg.norm(
-                        f_train_high[i] - f_high[i])/np.linalg.norm(f_high[i]))
+                    kernel_stack, torch.softmax(y_pred, dim=-1), len(vocab), device, label=False)
+                spectral_diff_training(
+                    f_low, f_high, f_train_low, f_train_high, global_step)
+
             global_step += 1
             epoch_loss += loss.item() * x.size(0)
 
         train_loss = epoch_loss / len(train_loader.dataset)  # type: ignore
-        test_loss = eval_loader(model, test_loader, loss_fn, device)
+        test_loss, test_acc = eval_loader(model, test_loader, loss_fn, device)
+        wandb.log({'test_loss': test_loss, 'test_acc': test_acc})
         print(
-            f"[Epoch {epoch+1}/{cfg['training']['epochs']}] Train Loss={train_loss:.5f}, Test Loss={test_loss:.5f}")
+            f"[Epoch {epoch+1}/{cfg['training']['epochs']}] Train Loss={train_loss:.4f}, Test Loss={test_loss:.4f}, Test Acc={test_acc:.4f}")
 
     # 6. Save model & config
-    for filter_idx, filter in enumerate(filter_var):
-        lowdiff_ind, highdiff_ind = lowdiff[filter_idx], highdiff[filter_idx]
-        plot_diff_distr(filter, lowdiff_ind, highdiff_ind, current_run_path)
-    # torch.save(model.state_dict(), f'{current_run_path}/MLP_weight.pt')
-    # print(f"Model saved to {cfg['output']['save_path']}!")
-    # wandb.finish()
+    wandb.finish()
+    print('Plotting spectral results ...')
+    lowdiff_arr, highdiff_arr = load_spectral_npz(
+        os.path.join(current_run_path, "spectral_log"))
+    for fid in range(filter_num):
+        plot_diff_distr(filter_var[fid], lowdiff_arr[:, fid],
+                        highdiff_arr[:, fid], current_run_path)
+
+    torch.save(model.state_dict(), f'{current_run_path}/MLP_weight.pt')
+    print(f"Model saved to {cfg['output']['save_path']}!")
+
+    yaml_path = os.path.join(current_run_path, "config.yaml")
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, sort_keys=False, allow_unicode=True)
 
 
 if __name__ == "__main__":

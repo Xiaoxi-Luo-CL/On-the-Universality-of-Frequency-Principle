@@ -10,7 +10,7 @@ import argparse
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 from utils import create_save_dir, plot_diff_distr, plot_loss, get_act_func
-from .filtering import compute_distance_for_training_loader, get_target_freq_distr, get_freq_low_high
+from filtering import compute_distance_for_training_loader, get_target_freq_distr, get_freq_low_high
 
 
 def evaluate(model, loss_fn, test_loader):
@@ -155,7 +155,7 @@ def main_sampled():
     train_labels = F.one_hot(targets, num_classes=10).detach().cpu().numpy()
 
     # compute distance matrix for sampled set
-    sample_idx = np.random.choice(len(train_dataset), 2000)
+    sample_idx = np.random.choice(len(train_dataset), 100)
     # sample_idx = np.arange(5000)
     sampled_train = Subset(train_dataset, sample_idx.tolist())
     dist = compute_distance_for_training_loader(sampled_train)
