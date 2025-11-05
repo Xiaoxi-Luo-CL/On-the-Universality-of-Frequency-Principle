@@ -7,13 +7,68 @@ import torch
 import random
 import argparse
 import yaml
+import math
+import torch.nn.init as init
+import torch.nn as nn
 
 
-def create_save_dir(folder=''):
+class MLP(nn.Module):
+    """A simple two-layer MLP with ReLU activation."""
+
+    def __init__(self, input_dim, hidden_dim, output_dim=1, activation='relu'):
+        super(MLP, self).__init__()
+        self.layer1 = nn.Linear(input_dim, hidden_dim)
+        self.activation = get_act_func(activation)
+        self.layer2 = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.activation(x)
+        x = self.layer2(x)
+        return x
+
+
+class MLP_NTK(nn.Module):
+    """
+    A two-layer MLP with NTK initialization.
+    This ensures that the empirical NTK scales as O(1) with respect to width.
+    """
+
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int = 1, activation: str = 'relu'):
+        super(MLP_NTK, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.layer1 = nn.Linear(input_dim, hidden_dim)
+        self.activation = get_act_func(activation)
+        self.layer2 = nn.Linear(hidden_dim, output_dim)
+        self._ntk_init(input_dim=input_dim)
+
+    def _ntk_init(self, input_dim: int):
+        """
+        Applies strict Gaussian initialization based on the NTK/Kernel parameterization.
+        Variance is set to 1/fan_in for all layers. Biases are zero.
+        """
+        std_w1 = 1.0 / math.sqrt(input_dim)
+        init.normal_(self.layer1.weight, mean=0.0, std=std_w1)
+        if self.layer1.bias is not None:
+            init.zeros_(self.layer1.bias)
+
+        init.normal_(self.layer2.weight, mean=0.0, std=1)
+        if self.layer2.bias is not None:
+            init.zeros_(self.layer2.bias)
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.activation(x)
+        x = self.layer2(x)
+        return x / math.sqrt(self.hidden_dim)
+
+
+def create_save_dir(folder='', suffix=''):
     """
     Create a new directory with the current date and time as its name and return the path of the new directory.
     """
-    subFolderName = re.sub(r'[^0-9]', '', str(datetime.datetime.now()))
+    subFolderName = re.sub(
+        r'[^0-9]', '', str(datetime.datetime.now()))[:10]+suffix
     path = os.path.join(folder, subFolderName)
     os.makedirs(path, exist_ok=True)
     # my_mkdir(os.path.join(path, 'output'))

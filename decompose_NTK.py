@@ -1,59 +1,13 @@
-'''Decompose NTK into eigenvalues and eigenvectors.'''
+'''Calculate NTK in three ways: Infinite analytical, infinite empirical, and finite empirical. Decompose NTK into eigenvalues and eigenvectors.'''
 
 import math
-import torch.nn.init as init
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import tqdm
 from torch.func import vmap, jacrev
-from utils import relu, d_relu, sin, cos, d_cos, sigmoid, d_sigmoid, tanh, d_tanh
-
-
-def get_act_func(activation):
-    """Placeholder for activation function retrieval."""
-    if activation.lower() == 'relu':
-        return nn.ReLU()
-    # You can add other activations here if needed
-    elif activation.lower() == 'sigmoid':
-        return nn.Sigmoid()
-    return nn.Identity()
-
-
-class MLP_NTK(nn.Module):
-    """
-    A two-layer MLP with NTK initialization.
-    This ensures that the empirical NTK scales as O(1) with respect to width.
-    """
-
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int = 1, activation: str = 'relu'):
-        super(MLP_NTK, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.layer1 = nn.Linear(input_dim, hidden_dim)
-        self.activation = get_act_func(activation)
-        self.layer2 = nn.Linear(hidden_dim, output_dim)
-        self._ntk_init(input_dim=input_dim)
-
-    def _ntk_init(self, input_dim: int):
-        """
-        Applies strict Gaussian initialization based on the NTK/Kernel parameterization.
-        Variance is set to 1/fan_in for all layers. Biases are zero.
-        """
-        std_w1 = 1.0 / math.sqrt(input_dim)
-        init.normal_(self.layer1.weight, mean=0.0, std=std_w1)
-        if self.layer1.bias is not None:
-            init.zeros_(self.layer1.bias)
-
-        init.normal_(self.layer2.weight, mean=0.0, std=1)
-        if self.layer2.bias is not None:
-            init.zeros_(self.layer2.bias)
-
-    def forward(self, x):
-        x = self.layer1(x)
-        x = self.activation(x)
-        x = self.layer2(x)
-        return x / math.sqrt(self.hidden_dim)
+from utils import relu, d_relu, sin, cos, d_cos, sigmoid, d_sigmoid, tanh, d_tanh, MLP_NTK
 
 
 def init_inputs(num_inputs=200):
@@ -72,7 +26,7 @@ def check(matrix, tol=1e-8):
 
 # --- Infinite-Width NTK Calculations (analytical and approximated) ---
 
-def NTK_analytical(ignore_warning=False):
+def NTK_analytical_relu(ignore_warning=False, approx_sample=None):
     """
     analytic solution: u = <x, x'> / ||x|| ||x'||
     k(u) = u k_0(u) + k_1(u)
@@ -86,8 +40,9 @@ def NTK_analytical(ignore_warning=False):
         k_0 = (1/pi) * (pi - np.arccos(u))
         k_1 = (1/pi) * (u * (pi - np.arccos(u)) + np.sqrt(1 - u**2))
         return u * k_0 + k_1
-
-    x = init_inputs(num_inputs=N_SAMPLES)  # (100, 2)
+    if approx_sample is None:
+        approx_sample = N_SAMPLES
+    x = init_inputs(approx_sample)  # (100, 2)
     inner_prod = np.dot(x, x.T)  # (100, 100)
     # numerical fix => values slightly > 1 will be capped
     inner_prod[inner_prod > 1.0] = 1.0
@@ -97,7 +52,7 @@ def NTK_analytical(ignore_warning=False):
     return kernel
 
 
-def NTK_numerical_approx(activation='relu', ignore_warning=False, num_w=40000):
+def infinite_NTK_approx(activation='relu', ignore_warning=False, num_w=40000):
     """
     Numerical kernel approximation. Reference: 
     https://papers.nips.cc/paper/2019/file/c4ef9c39b300931b69a36fb3dbb8d60e-Paper.pdf
@@ -166,18 +121,22 @@ def NTK_empirical(model, x, ignore_warning=False):
     return kernel
 
 
-def plot_eigendecay(kernel_ls: list, label_ls: list, loglog=False, fig_name='eigendecay'):
-    for kernel, label in zip(kernel_ls, label_ls):
-        eigenvalues = np.linalg.eigh(kernel)[0]
-        sorted_eigenvalues = np.sort(eigenvalues)[::-1]
+def plot_eigendecay(kernel_ls: list, label_ls: list, loglog=False, eigen_num=200, fig_name='eigendecay', fig_path=None, sorted_eigenval: list | None = None):
+    for i, (kernel, label) in enumerate(zip(kernel_ls, label_ls)):
+        if sorted_eigenval is not None:
+            sorted_eigenvalues = sorted_eigenval[i]
+        else:
+            eigenvalues = np.linalg.eigh(kernel)[0]
+            sorted_eigenvalues = np.sort(eigenvalues)[::-1]
         if loglog:
-            plt.loglog(sorted_eigenvalues[:200], label=label)
+            plt.loglog(sorted_eigenvalues[:eigen_num], label=label)
         else:
             plt.yscale('log')
-            plt.plot(sorted_eigenvalues[:200], label=label)
+            plt.plot(sorted_eigenvalues[:eigen_num], label=label)
     plt.legend()
     plt.title(fig_name)
-    plt.savefig(fig_name+'.png')
+    fig_path = fig_name if fig_path is None else fig_path
+    plt.savefig(fig_path+'.png')
     plt.clf()
 
 
@@ -205,12 +164,12 @@ if __name__ == "__main__":
     act_map = {'relu': (relu, d_relu), 'sin': (sin, cos), 'cos': (cos, d_cos),
                'sigmoid': (sigmoid, d_sigmoid), 'tanh': (tanh, d_tanh)}
 
-    kernel_analytical = NTK_analytical()
-    kernel_relu = NTK_numerical_approx('relu')
-    kernel_sin = NTK_numerical_approx('sin')
-    kernel_cos = NTK_numerical_approx('cos')
-    kernel_sigmoid = NTK_numerical_approx('sigmoid')
-    kernel_tanh = NTK_numerical_approx('tanh')
+    kernel_analytical = NTK_analytical_relu()
+    kernel_relu = infinite_NTK_approx('relu')
+    kernel_sin = infinite_NTK_approx('sin')
+    kernel_cos = infinite_NTK_approx('cos')
+    kernel_sigmoid = infinite_NTK_approx('sigmoid')
+    kernel_tanh = infinite_NTK_approx('tanh')
     # empirical check with MLP NTK
     emperical_relu = NTK_empirical_mlp(act_func='ReLU')
 

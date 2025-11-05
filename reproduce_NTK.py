@@ -8,7 +8,7 @@ import numpy as np
 from scipy.special import gegenbauer
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from utils import get_act_func
+from utils import MLP, MLP_NTK
 
 
 def generate_spherical_data(n_samples, d_input):
@@ -27,24 +27,6 @@ def get_gegenbauer_poly(degree, dim):
     # The dimension of the ambient space is 10.
     # Lambda for Gegenbauer polynomials C_n^(lambda) is (dim-2)/2.
     return gegenbauer(degree, (dim - 2) / 2)
-
-
-class MLP(nn.Module):
-    """A simple two-layer MLP with ReLU activation."""
-
-    def __init__(self, input_dim, hidden_dim, output_dim=1, activation='relu'):
-        super(MLP, self).__init__()
-        self.layer1 = nn.Linear(input_dim, hidden_dim)
-        self.activation = get_act_func(activation)
-        self.layer2 = nn.Linear(hidden_dim, output_dim)
-        from IPython import embed
-        embed()
-
-    def forward(self, x):
-        x = self.layer1(x)
-        x = self.activation(x)
-        x = self.layer2(x)
-        return x
 
 
 def run_experiment(coeffs, title, fig_name='reproduce_1.png'):
@@ -79,7 +61,8 @@ def run_experiment(coeffs, title, fig_name='reproduce_1.png'):
         y_train += coeffs[i] * raw_components[i].unsqueeze(1)
 
     # Initialize model, loss, and optimizer
-    model = MLP(D_INPUT, WIDTH)
+    # model = MLP(D_INPUT, WIDTH)
+    model = MLP_NTK(D_INPUT, WIDTH)
     criterion = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 
@@ -131,7 +114,7 @@ if __name__ == "__main__":
     DEGREES = [1, 2, 4]  # Degrees of spherical harmonics to be used
 
     # --- My setting ---
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 1e-2
     STEPS = 20000
     LOGGING_INTERVAL = 100
 

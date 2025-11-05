@@ -21,4 +21,5 @@ cifar-10-batches-py/
 1d-runs/
 nd-runs/
 NLP-runs/
+experiments/
 *.png
