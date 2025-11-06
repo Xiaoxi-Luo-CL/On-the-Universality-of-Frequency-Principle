@@ -14,6 +14,7 @@ from tqdm import tqdm
 from decompose_NTK import MLP_NTK, NTK_empirical, plot_eigendecay
 from utils import create_save_dir
 import finufft
+from frequency_func import analyze_spectral_error_dynamics
 
 
 def init_inputs(num_inputs=200, dim=2, option='uniform'):
@@ -132,7 +133,7 @@ def eigenvector_spectrum(eigenvectors, x_data, vec_list_to_plot, theta,
                 np.complex64), (n_freqs, n_freqs), isign=-1)
             power_2d = np.abs(f_k)**2
 
-            plt.imshow(np.fft.fftshift(power_2d), origin='lower',
+            plt.imshow(power_2d, origin='lower',
                        extent=(-10, 10, -10, 10))
             plt.title(f"Spectrum of Eigenvector {vec_idx} (2D NUFFT)")
             plt.xlabel("Frequency k_x")
@@ -156,6 +157,7 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
     projection_history = {k: [] for k in indices_to_track}
     step_history = []
     loss_history = []
+    y_pred_history = []
     v_k_tensors = {k: torch.Tensor(
         np.real(ntk_eigenvectors[:, k])) for k in indices_to_track}
 
@@ -170,6 +172,7 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
         if step % LOG_INTERVAL == 0:
             print(f'step {step}, loss = ', loss.item())
             step_history.append(step)
+            y_pred_history.append(y_pred.detach().numpy())
             with torch.no_grad():
                 residual_vec = (y_target - y_pred).detach().squeeze()
                 for k in indices_to_track:
@@ -197,6 +200,7 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
     plt.ylabel("Loss")
     plt.savefig(f'{SAVE_DIR}/loss_{fig_name}')
     plt.clf()
+    return projection_history, step_history, model, y_pred_history
 
 
 if __name__ == "__main__":
@@ -204,7 +208,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--d_input', type=int, default=2,
                         help='Input dimension')
-    parser.add_argument('--n_samples', type=int, default=1000,
+    parser.add_argument('--n_samples', type=int, default=500,
                         help='Number of data points')
     parser.add_argument('--width', type=int, default=1000,
                         help='Width of the MLP')
@@ -215,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument('--target_func', type=int,
                         default=1, choices=[1, 2, 3])
     parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
-    parser.add_argument('--steps', type=int, default=10000,
+    parser.add_argument('--steps', type=int, default=20000,
                         help="Training steps")
     args = parser.parse_args()
 
@@ -228,7 +232,7 @@ if __name__ == "__main__":
     ACTIVATION = args.activation
     LEARNING_RATE = args.lr
     TRAIN_STEPS = args.steps
-    LOG_INTERVAL = 100
+    LOG_INTERVAL = 200
     file_name = f'_n{NUM_SAMPLES}_w{WIDTH}_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}_steps{TRAIN_STEPS}_lr{LEARNING_RATE}'
 
     torch.manual_seed(42)
@@ -264,9 +268,12 @@ if __name__ == "__main__":
     mlp_to_train = MLP_NTK(
         input_dim=INPUT_DIM, hidden_dim=WIDTH, activation=ACTIVATION)
 
-    train(
+    proj_hist, steps, trained_model, y_pred_hist = train(
         mlp_to_train, x_data, y_target,
         eigenvectors, eigenvalues, indices_to_track=[0, 1, 2, 3, 4, 5, 10, 20],
         fig_name=f"train_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}",
         lr=LEARNING_RATE, steps=TRAIN_STEPS
     )
+
+    analyze_spectral_error_dynamics(
+        x_data, y_target, y_pred_hist, theta, steps, DATA_OPTION, SAVE_DIR)

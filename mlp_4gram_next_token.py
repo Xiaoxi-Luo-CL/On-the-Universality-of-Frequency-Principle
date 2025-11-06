@@ -228,11 +228,6 @@ def get_freq_low_high(kernel_stack: torch.Tensor, y: torch.Tensor, vocab_size: i
                       num_classes=vocab_size).float().to(device)  # (N, V)
     f_low = torch.einsum('knm,mv->knv', kernel_stack, y)  # (K, N, V)
     f_high = y.unsqueeze(0) - f_low  # (K, N, V)
-    # if label:
-    #     low_freq_ratio = torch.norm(f_low, dim=(1, 2)) / torch.norm(y)
-    #     print(low_freq_ratio)
-    #     from IPython import embed
-    #     embed()
     return f_low, f_high
 
 

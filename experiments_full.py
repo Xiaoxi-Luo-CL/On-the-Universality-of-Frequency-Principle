@@ -125,7 +125,7 @@ def _analyze_spectrum_core(ax, y_values, x_data, theta, title):
             np.complex64), (n_freqs, n_freqs))
         power_2d = np.abs(f_k)**2
 
-        im = ax.imshow(np.fft.fftshift(power_2d), origin='lower',
+        im = ax.imshow(power_2d, origin='lower',
                        extent=(-10, 10, -10, 10))
         ax.set_title(f"{title} (2D NUFFT)")
         ax.set_xlabel("Frequency k_x")
@@ -203,7 +203,7 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
                  label=f"Eigvec {k} (λ={ntk_eigenvalues[k]:.2e})")
     plt.xlabel("Training Step")
     plt.ylabel("Projection Length of Residual")
-    plt.title("Training Dynamics Projected onto NTK Eigenbasis")
+    plt.title("Training Residual Projected onto NTK Eigenbasis")
     plt.yscale('log')
     plt.legend()
     plt.grid(True, which="both", linestyle='--')
@@ -256,10 +256,10 @@ def analyze_decay_rate_vs_eigenvalue(projection_history, step_history, ntk_eigen
             decay_rates.append(-slope)
             eigvals_list.append(ntk_eigenvalues[k])
             print(
-                f"  Eigenvector {k}: λ={ntk_eigenvalues[k]:.2e}, Decay Rate (slope)={-slope:.2e}, R^2={r_value**2:.3f}")
+                f"sEigenvector {k}: λ={ntk_eigenvalues[k]:.2e}, Decay Rate (slope)={-slope:.2e}, R^2={r_value**2:.3f}")
         else:
             print(
-                f"  Skipping Eigenvector {k}: Non-negative slope ({slope:.2e}), training may be unstable.")
+                f"Skipping Eigenvector {k}: Non-negative slope ({slope:.2e}), training may be unstable.")
 
     if not eigvals_list:
         print("No valid decay rates found to plot.")
@@ -307,11 +307,11 @@ def full_pipeline(kernel, vec_list, label='ANA'):
                     loglog=False, eigen_num=min(100, NUM_SAMPLES))
     eigenvector_spectrum(eigenvectors, x_data, vec_list, theta,
                          fig_name=f"{label}_spectrum_{DATA_OPTION}")
-    from IPython import embed
-    embed()
+
     # --- training dynamics ---
     torch.manual_seed(42)
     np.random.seed(42)
+
     mlp_to_train = MLP_NTK(
         input_dim=INPUT_DIM, hidden_dim=WIDTH, activation=ACTIVATION)
 
@@ -351,8 +351,8 @@ if __name__ == "__main__":
     parser.add_argument('--data_option', type=str, default='uniform',
                         help="Data generation option: 'uniform', 'sphered', or 'random'")
     parser.add_argument('--target_func', type=int,
-                        default=1, choices=[2, 3, 4])
-    parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
+                        default=1, choices=[1, 2, 3])
+    parser.add_argument('--lr', type=float, default=5e-4, help="Learning rate")
     parser.add_argument('--steps', type=int, default=10000,
                         help="Training steps")
     args = parser.parse_args()
@@ -367,8 +367,9 @@ if __name__ == "__main__":
     LEARNING_RATE = args.lr
     TRAIN_STEPS = args.steps
     LOG_INTERVAL = 100
+    file_name = f'_n{NUM_SAMPLES}_w{WIDTH}_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}_steps{TRAIN_STEPS}_lr{LEARNING_RATE}'
 
-    SAVE_DIR = create_save_dir('experiments/pipeline2')
+    SAVE_DIR = create_save_dir('experiments/pipeline2', suffix=file_name)
     print('Current run path: ', SAVE_DIR)
 
     torch.manual_seed(42)
