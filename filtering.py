@@ -57,11 +57,10 @@ def get_freq_low_high(yy, kernel_dict):
 
     Args:
         yy (np.ndarray): NumPy array representing the model output.
-        kernel_dict (list): A list of 2D NumPy arrays (eg: 5000 * 5000) representing the Gaussian kernels to use for filtering.
+        kernel_dict (list): A list of 2D NumPy arrays representing the Gaussian kernels to use for filtering.
 
     Returns:
-        tuple: A tuple of two lists, where the first list contains the low frequency components of
-                the model output and the second list contains the high frequency components of the model output.
+        tuple: A tuple of two lists, low and high frequency components of the model output
     """
     f_low, f_high = [], []
     for filter in range(len(kernel_dict)):
@@ -83,12 +82,6 @@ def get_target_freq_distr(train_labels, dist, filter_start, filter_end, filter_n
         filter_start (float): The starting value of the filter range.
         filter_end (float): The ending value of the filter range.
         filter_num (int): The number of filters to use in the filter range.
-
-    Returns:
-        tuple: A tuple of four elements, where the first element is a 1D NumPy array of filter values,
-                the second element is a list of 2D NumPy arrays representing the Gaussian kernels for filtering,
-                the third element is a list (length 20) of 1D NumPy arrays (5000, 10) representing the low frequency components of the training labels,
-                and the fourth element is a list of 1D NumPy arrays representing the high frequency components of the training labels.
     """
     filter_dict = np.linspace(filter_start, filter_end, num=filter_num)
     kernel_dict = normal_kernel(dist, filter_dict)

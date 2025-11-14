@@ -4,8 +4,57 @@ import matplotlib.pyplot as plt
 import finufft
 import math
 from typing import Dict, List, Tuple, Any
-import torch.nn as nn
 import os
+from filtering import normal_kernel, get_freq_low_high
+from utils import plot_diff_distr
+
+
+def analyze_filtering_dynamics(
+    x_data: torch.Tensor, y_target: torch.Tensor,
+    y_pred_history: List[np.ndarray], save_dir: str
+):
+    """
+    Runs the Filtering Method analysis on pre-computed training data.
+    Args:
+        x_data (Tensor): (N, D) input data.
+        y_target (Tensor): (N, 1) target data.
+        y_pred_history (List[np.ndarray]): A list where each element is the
+                                           (N, 1) prediction array at a given step.
+        save_dir (str): Path to save the plots.
+    """
+    dist_matrix = -2 * np.dot(x_data, x_data.T) + np.sum(x_data**2, axis=1) + \
+        np.sum(x_data**2, axis=1)[:, np.newaxis]
+
+    # Define filter parameters (matching the 1d-runs example)
+    filter_start, filter_end = 0.1, 10
+    filter_num = 10
+
+    # filter_dict = np.linspace(filter_start, filter_end, num=filter_num)
+    filter_dict = np.linspace(filter_start, filter_end, filter_num)
+    kernel_dict = normal_kernel(dist_matrix, filter_dict)
+    f_low_target, f_high_target = get_freq_low_high(y_target, kernel_dict)
+
+    lowdiff_history = [[] for _ in kernel_dict]
+    highdiff_history = [[] for _ in kernel_dict]
+
+    for y_pred_np in y_pred_history:
+        # y_pred_np already has shape (N, 1)
+        f_pred_low, f_pred_high = get_freq_low_high(y_pred_np, kernel_dict)
+
+        for i in range(len(filter_dict)):
+            # e_low = ||f_low_target - f_low_pred|| / ||f_low_target||
+            e_low_num = np.linalg.norm(f_low_target[i] - f_pred_low[i])
+            e_low_den = np.linalg.norm(f_low_target[i])
+            lowdiff_history[i].append(e_low_num / (e_low_den + 1e-9))
+
+            # e_high = ||f_high_target - f_high_pred|| / ||f_high_target||
+            e_high_num = np.linalg.norm(f_high_target[i] - f_pred_high[i])
+            e_high_den = np.linalg.norm(f_high_target[i])
+            highdiff_history[i].append(e_high_num / (e_high_den + 1e-9))
+
+    for filter_index, filter_val in enumerate(filter_dict):
+        plot_diff_distr(
+            filter_val, lowdiff_history[filter_index], highdiff_history[filter_index], save_dir)
 
 
 def plot_spectral_error_heatmap(
@@ -19,7 +68,6 @@ def plot_spectral_error_heatmap(
 
     Inspired by the 'plot_diff_distr' function provided by the user.
     """
-    # ---  Data Preparation ---
     # Sort the frequency magnitudes to ensure low-freqs are at the bottom
     tracking_mags = sorted(relative_error_history.keys())
 
@@ -85,7 +133,7 @@ def _calculate_nufft_spectrum(y_values: np.ndarray, x_data: torch.Tensor,
             frequency_map[k] = amp
         return frequency_map
 
-    elif option in ['sphered', 'random']:
+    elif option in ['sphered', 'random', 'clustered']:
         n_freqs = 21  # Target frequency grid size [-10, 10]
 
         if option == 'sphered':
@@ -111,14 +159,14 @@ def _calculate_nufft_spectrum(y_values: np.ndarray, x_data: torch.Tensor,
                 x_scaled, y_scaled, y_values.astype(np.complex64),
                 (n_freqs, n_freqs), isign=-1)
 
-            # Calculate normalized AMPLITUDE |F(k)| / N
+            # Calculate normalized amplitude |F(k)| / N
             amp_2d = f_k / N_samples
             kx = np.arange(n_freqs) - n_freqs // 2
             ky = np.arange(n_freqs) - n_freqs // 2
 
             for i, kx_val in enumerate(kx):
                 for j, ky_val in enumerate(ky):
-                    mag_k = int(kx_val**2 + ky_val**2)
+                    mag_k = int(np.round(np.sqrt(kx_val**2 + ky_val**2)))
                     if mag_k not in frequency_map:
                         frequency_map[mag_k] = []
                     frequency_map[mag_k].append(np.abs(amp_2d[j, i]))
@@ -141,15 +189,12 @@ def analyze_spectral_error_dynamics(
     target_values = y_target.squeeze().detach().numpy()
     target_freq_map = _calculate_nufft_spectrum(
         target_values, x_data, theta, data_option)
-
     # track relative error, sorted by magnitude |k|, skip 0
     k_magnitudes = sorted(target_freq_map.keys())
     tracking_mags = [k for k in k_magnitudes if np.abs(
         target_freq_map[k]) > 1e-4]
     if len(tracking_mags) > 10:
         tracking_mags = [k for k in tracking_mags if k >= 0][:8]
-    from IPython import embed
-    embed()
 
     # store relative error: {mag_k: [error_step0, error_step1, ...]}
     relative_error_history: Dict[int, List[float]] = {
@@ -187,5 +232,3 @@ def analyze_spectral_error_dynamics(
     plt.grid(True, which="both", linestyle='--')
     plt.savefig(f'{save_dir}/spectral_error_dynamics.png')
     plt.clf()
-
-    # plot_spectral_error_heatmap(relative_error_history, steps, save_dir)

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import torch
 import tqdm
 from torch.func import vmap, jacrev
-from utils import relu, d_relu, sin, cos, d_cos, sigmoid, d_sigmoid, tanh, d_tanh, MLP_NTK
+from utils import relu, d_relu, sin, cos, d_cos, sigmoid, d_sigmoid, tanh, d_tanh, MLP_General
 
 
 def init_inputs(num_inputs=200):
@@ -141,7 +141,8 @@ def plot_eigendecay(kernel_ls: list, label_ls: list, loglog=False, eigen_num=200
 
 
 def NTK_empirical_mlp(act_func='ReLU'):
-    model = MLP_NTK(input_dim=D_INPUT, hidden_dim=WIDTH, activation=act_func)
+    model = MLP_General(input_dim=D_INPUT,
+                        hidden_dim=WIDTH, activation=act_func)
     x = init_inputs(num_inputs=N_SAMPLES)  # (2, 100)
     kernel = NTK_empirical(model, x)
     return kernel

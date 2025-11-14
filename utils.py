@@ -1,15 +1,15 @@
-import os
-import re
-import datetime
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
-import random
-import argparse
-import yaml
-import math
-import torch.nn.init as init
 import torch.nn as nn
+import torch.nn.init as init
+import math
+import yaml
+import argparse
+import random
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+import datetime
+import re
+import os
 
 
 class MLP(nn.Module):
@@ -28,31 +28,50 @@ class MLP(nn.Module):
         return x
 
 
-class MLP_NTK(nn.Module):
+class MLP_General(nn.Module):
     """
-    A two-layer MLP with NTK initialization.
-    This ensures that the empirical NTK scales as O(1) with respect to width.
+    A unified two-layer MLP that supports both NTK and Mean-Field parameterizations.
+
+    Args:
+        parameterization (str): 
+            - 'ntk': Scales output by 1/sqrt(width). Enters 'Lazy Training' regime as width -> inf.
+            - 'mean_field': Scales output by 1/width. Enters 'Feature Learning' regime as width -> inf.
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int = 1, activation: str = 'relu'):
-        super(MLP_NTK, self).__init__()
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int = 1,
+                 activation: str = 'relu', parameterization: str = 'ntk'):
+        super(MLP_General, self).__init__()
         self.hidden_dim = hidden_dim
+        self.parameterization = parameterization.lower()
+
         self.layer1 = nn.Linear(input_dim, hidden_dim)
         self.activation = get_act_func(activation)
         self.layer2 = nn.Linear(hidden_dim, output_dim)
-        self._ntk_init(input_dim=input_dim)
 
-    def _ntk_init(self, input_dim: int):
+        # scaling factor based on parameterization
+        if self.parameterization == 'ntk':
+            self.scaling_factor = 1.0 / math.sqrt(hidden_dim)
+        elif self.parameterization == 'mf':
+            self.scaling_factor = 1.0 / float(hidden_dim)
+        else:
+            raise ValueError(
+                f"Unknown parameterization: {parameterization}. Choose 'ntk' or 'mf'.")
+
+        # Initialize weights (Weights are O(1) for both, scaling happens in forward)
+        self._init_weights(input_dim)
+
+    def _init_weights(self, input_dim: int):
         """
-        Applies strict Gaussian initialization based on the NTK/Kernel parameterization.
-        Variance is set to 1/fan_in for all layers. Biases are zero.
+        Standard initialization for both regimes:
+        W1 ~ N(0, 1/d_in) to keep hidden layer input O(1).
+        W2 ~ N(0, 1) to keep weights O(1).
         """
         std_w1 = 1.0 / math.sqrt(input_dim)
         init.normal_(self.layer1.weight, mean=0.0, std=std_w1)
         if self.layer1.bias is not None:
             init.zeros_(self.layer1.bias)
 
-        init.normal_(self.layer2.weight, mean=0.0, std=1)
+        init.normal_(self.layer2.weight, mean=0.0, std=1.0)
         if self.layer2.bias is not None:
             init.zeros_(self.layer2.bias)
 
@@ -60,7 +79,7 @@ class MLP_NTK(nn.Module):
         x = self.layer1(x)
         x = self.activation(x)
         x = self.layer2(x)
-        return x / math.sqrt(self.hidden_dim)
+        return x * self.scaling_factor
 
 
 def create_save_dir(folder='', suffix=''):
@@ -165,11 +184,9 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def load_config():
+def load_config(cfg='mlp-config.yaml'):
     parser = argparse.ArgumentParser(
         description="Spectral Bias NLP Experiment")
-    parser.add_argument(
-        "--config", type=str, default="nlp-config.yaml", help="Path to YAML config file")
     parser.add_argument("--epochs", type=int,
                         help="Override number of training epochs")
     parser.add_argument("--lr", type=float, help="Override learning rate")
@@ -179,7 +196,7 @@ def load_config():
                         help="Override n-grams per document")
     args = parser.parse_args()
 
-    with open(args.config, "r") as f:
+    with open(cfg, "r") as f:
         cfg = yaml.safe_load(f)
 
     if args.epochs is not None:

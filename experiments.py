@@ -11,10 +11,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
-from decompose_NTK import MLP_NTK, NTK_empirical, plot_eigendecay
-from utils import create_save_dir
+from decompose_NTK import NTK_empirical, plot_eigendecay
+from utils import create_save_dir, MLP_General, MLP
 import finufft
-from frequency_func import analyze_spectral_error_dynamics
+from frequency_func import analyze_spectral_error_dynamics, analyze_filtering_dynamics
 
 
 def init_inputs(num_inputs=200, dim=2, option='uniform'):
@@ -41,6 +41,30 @@ def init_inputs(num_inputs=200, dim=2, option='uniform'):
         x_data = torch.randn(num_inputs, dim)
         x_data[x_data > np.pi] = np.pi * 0.999
         x_data[x_data < -np.pi] = -np.pi * 0.999
+        return x_data.float(), None
+    elif option == 'clustered':
+        print("Generating 'clustered' (GMM) data...")
+
+        # Cluster 1: 50% of points, tight cluster in top-left
+        n1 = int(num_inputs * 0.5)
+        mean1 = torch.tensor([-2.0, 2.0])
+        std1 = 0.3
+        c1 = torch.randn(n1, dim) * std1 + mean1
+
+        # Cluster 2: 30% of points, medium cluster in bottom-right
+        n2 = int(num_inputs * 0.3)
+        mean2 = torch.tensor([1.5, -1.5])
+        std2 = 0.5
+        c2 = torch.randn(n2, dim) * std2 + mean2
+
+        # Cluster 3: 20% of points, wide cluster near center
+        n3 = num_inputs - n1 - n2
+        mean3 = torch.tensor([0.0, 0.0])
+        std3 = 1.0
+        c3 = torch.randn(n3, dim) * std3 + mean3
+
+        x_data = torch.cat([c1, c2, c3], dim=0)
+        x_data.clamp_(-np.pi, np.pi)
         return x_data.float(), None
     else:
         raise ValueError("Invalid option for data generation.")
@@ -215,12 +239,14 @@ if __name__ == "__main__":
     parser.add_argument('--activation', type=str, default='ReLU',
                         help="Activation function: 'ReLU' or 'Tanh'")
     parser.add_argument('--data_option', type=str, default='uniform',
-                        help="Data generation option: 'uniform', 'sphered', or 'random'")
+                        help="Data generation option: 'uniform', 'sphered', 'random', 'clustered'")
     parser.add_argument('--target_func', type=int,
                         default=1, choices=[1, 2, 3])
     parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
     parser.add_argument('--steps', type=int, default=20000,
                         help="Training steps")
+    parser.add_argument('--initialization', type=str, default='ntk',
+                        choices=['kaiming', 'ntk', 'mf'], help="Initialization method")
     args = parser.parse_args()
 
     # --- Setting hyperparameters ---
@@ -233,12 +259,14 @@ if __name__ == "__main__":
     LEARNING_RATE = args.lr
     TRAIN_STEPS = args.steps
     LOG_INTERVAL = 200
-    file_name = f'_n{NUM_SAMPLES}_w{WIDTH}_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}_steps{TRAIN_STEPS}_lr{LEARNING_RATE}'
+    INITIAL = args.initialization
+    file_name = f'_n{NUM_SAMPLES}_w{WIDTH}_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}_steps{TRAIN_STEPS}_lr{LEARNING_RATE}_{INITIAL}'
 
     torch.manual_seed(42)
     np.random.seed(42)
-    mlp_for_ntk = MLP_NTK(input_dim=INPUT_DIM,
-                          hidden_dim=WIDTH, activation=ACTIVATION)
+    mlp_for_ntk = MLP_General(input_dim=INPUT_DIM, hidden_dim=WIDTH,
+                              activation=ACTIVATION, parameterization=INITIAL)
+
     # define data and model
     x_data, theta = init_inputs(
         num_inputs=NUM_SAMPLES, dim=INPUT_DIM, option=DATA_OPTION)
@@ -265,8 +293,8 @@ if __name__ == "__main__":
     # define a new model to ensure everything is fresh
     torch.manual_seed(42)
     np.random.seed(42)
-    mlp_to_train = MLP_NTK(
-        input_dim=INPUT_DIM, hidden_dim=WIDTH, activation=ACTIVATION)
+    mlp_to_train = MLP_General(input_dim=INPUT_DIM, hidden_dim=WIDTH,
+                               activation=ACTIVATION, parameterization=INITIAL)
 
     proj_hist, steps, trained_model, y_pred_hist = train(
         mlp_to_train, x_data, y_target,
@@ -277,3 +305,5 @@ if __name__ == "__main__":
 
     analyze_spectral_error_dynamics(
         x_data, y_target, y_pred_hist, theta, steps, DATA_OPTION, SAVE_DIR)
+    analyze_filtering_dynamics(
+        x_data.numpy(), y_target.numpy(), y_pred_hist, SAVE_DIR)

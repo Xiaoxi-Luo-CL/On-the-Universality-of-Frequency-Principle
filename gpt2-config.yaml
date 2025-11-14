@@ -1,0 +1,40 @@
+# config file for NLP task
+dataset:
+  ngram: 4
+  train_ratio: 0.8
+  num_docs: 100000          # number of randomly sampled documents
+  ngrams_per_doc: 30        # number of n-grams per document
+
+model:
+  name: gpt2-base
+  class_name: GPT2LMHeadModel
+
+  transformer:
+    d_head: 64
+    n_head: 12
+    n_layer: 12
+
+  tokenizer:
+    model_max_length: 512
+    tokenizer_type: 'wordlevel'  # 'gpt2' | 'wordlevel'
+    vocab_file: 'vocab_visual.json'
+
+training:
+  batch_size: 32
+  lr: 0.00005
+  warmup_steps: 1000
+  reset_lr: false
+  reset_weight_decay: false
+  epochs: 5
+  seed: 42
+
+spectral:
+  sample_size: 10000
+  scale: "log" # "linear" or "log"
+  interval: 5000
+  filter_start: 0.001
+  filter_end: 100
+  filter_num: 10
+
+output:
+  save_path: "GPT2_spectral_wikitext.pt"

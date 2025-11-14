@@ -27,10 +27,10 @@ from utils import get_act_func, create_save_dir, set_seed, load_config, plot_dif
 
 # Load WikiText, build n-gram dataset and dataloader -----------------
 
-def load_wikitext(num_doc=None) -> Union[DatasetDict, dict]:
+def load_wikitext(num_doc=None, test_num=1, train_num=3) -> Union[DatasetDict, dict]:
     dataset = load_dataset("parquet", data_files={
-        'test': [f'dataset/wikitext/test-0000{i}-of-00002.parquet' for i in range(1)],
-        'train': [f'dataset/wikitext/train-0000{i}-of-00006.parquet' for i in range(3)]},
+        'test': [f'dataset/wikitext/test-0000{i}-of-00002.parquet' for i in range(test_num)],
+        'train': [f'dataset/wikitext/train-0000{i}-of-00006.parquet' for i in range(train_num)], },
         streaming=False).select_columns(['text'])
     assert isinstance(dataset, DatasetDict)
 
@@ -166,7 +166,7 @@ def eval_loader(model, loader, loss_fn, device, return_outputs=False):
     return total_loss / len(loader.dataset), total_acc / len(loader.dataset)
 
 
-def spectral_diff_training(f_low, f_high, f_train_low, f_train_high, step) -> Tuple[np.ndarray, np.ndarray]:
+def spectral_diff_training(f_low, f_high, f_train_low, f_train_high, step, save_path) -> Tuple[np.ndarray, np.ndarray]:
     numer_low = torch.norm(f_train_low - f_low, dim=(1, 2))
     denom_low = torch.norm(f_low, dim=(1, 2)) + 1e-8
     numer_high = torch.norm(f_train_high - f_high, dim=(1, 2))
@@ -174,9 +174,9 @@ def spectral_diff_training(f_low, f_high, f_train_low, f_train_high, step) -> Tu
 
     low_diff = (numer_low / denom_low).cpu().numpy()   # (K)
     high_diff = (numer_high / denom_high).cpu().numpy()  # (K)
-    os.makedirs(os.path.join(current_run_path, "spectral_log"), exist_ok=True)
+    os.makedirs(os.path.join(save_path, "spectral_log"), exist_ok=True)
 
-    np.savez_compressed(f'{current_run_path}/spectral_log/step_{step}.npz',
+    np.savez_compressed(f'{save_path}/spectral_log/step_{step}.npz',
                         low=low_diff, high=high_diff)
     return low_diff, high_diff
 
@@ -236,7 +236,6 @@ def sampled_dataset_to_distance(ngram_set: SampledNgramDataset, embedding: torch
     train_indices = np.random.choice(
         len(ngram_set), size=min(len(ngram_set), sample), replace=False)
     sampled_ngram = ngram_set.select(train_indices)
-
     sampled_ngram_flat = embedding[sampled_ngram.ngrams].reshape(
         sampled_ngram.ngrams.shape[0], -1).to(device)
     dist = compute_distance_matrix(sampled_ngram_flat, metric="euclidean")
@@ -288,6 +287,7 @@ def main():
     else:
         filter_var = np.logspace(np.log10(cfg['spectral']['filter_start']),
                                  np.log10(cfg['spectral']['filter_end']), filter_num)
+
     dist, sampled_ngram_dataset, sampled_f_label = sampled_dataset_to_distance(
         train_dataset, embedding_matrix, sample=cfg['spectral']['sample_size'], device=device)
     sampled_loader = DataLoader(
@@ -351,7 +351,7 @@ def main():
                 f_train_low, f_train_high = get_freq_low_high(
                     kernel_stack, torch.softmax(y_pred, dim=-1), len(vocab), device, label=False)
                 spectral_diff_training(
-                    f_low, f_high, f_train_low, f_train_high, global_step)
+                    f_low, f_high, f_train_low, f_train_high, global_step, current_run_path)
 
             global_step += 1
             epoch_loss += loss.item() * x.size(0)
