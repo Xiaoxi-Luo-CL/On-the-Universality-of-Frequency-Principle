@@ -11,5 +11,11 @@
 #SBATCH -e JOB-%j.err
 
 
-echo "GPT2 spectral bias"
-/u501/x25luo/.conda/envs/spectral/bin/python gpt2_4gram_next_token.py
+echo "spectral bias"
+for data_option in uniform sphered random clustered
+do
+    for target_func in 1 2 3
+    do
+        /u501/x25luo/.conda/envs/spectral/bin/python experiments.py --lr 0.0002 --data_option ${data_option} --target_func ${target_func} --steps 20000 
+    done
+done

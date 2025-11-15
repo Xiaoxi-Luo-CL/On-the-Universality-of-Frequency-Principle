@@ -8,7 +8,7 @@ import numpy as np
 from scipy.special import gegenbauer
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from utils import MLP, MLP_NTK
+from utils import MLP_General
 
 
 def generate_spherical_data(n_samples, d_input):
@@ -52,7 +52,9 @@ def run_experiment(coeffs, title, fig_name='reproduce_1.png'):
         raw_components.append(v_k_raw)
 
     # normalize projection vectors
-    proj_vectors = [(v / torch.linalg.norm(v)) for v in raw_components]
+    # proj_vectors = [(v / torch.linalg.norm(v)) for v in raw_components]
+    proj_vectors = [(v / (torch.linalg.norm(v) * np.sqrt(N_SAMPLES)))
+                    for v in raw_components]
 
     # Construct target function y_train by summing the *normalized* components
     y_train = torch.zeros(N_SAMPLES, 1)
@@ -62,7 +64,7 @@ def run_experiment(coeffs, title, fig_name='reproduce_1.png'):
 
     # Initialize model, loss, and optimizer
     # model = MLP(D_INPUT, WIDTH)
-    model = MLP_NTK(D_INPUT, WIDTH)
+    model = MLP_General(D_INPUT, WIDTH)
     criterion = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 

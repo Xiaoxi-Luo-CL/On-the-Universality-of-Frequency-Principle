@@ -15,6 +15,7 @@ from decompose_NTK import NTK_empirical, plot_eigendecay
 from utils import create_save_dir, MLP_General, MLP
 import finufft
 from frequency_func import analyze_spectral_error_dynamics, analyze_filtering_dynamics
+from sklearn.linear_model import LinearRegression
 
 
 def init_inputs(num_inputs=200, dim=2, option='uniform'):
@@ -215,6 +216,7 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
     plt.yscale('log')
     plt.legend()
     plt.grid(True, which="both", linestyle='--')
+    plt.tight_layout()
     plt.savefig(f'{SAVE_DIR}/{fig_name}.png')
     plt.clf()
 
@@ -277,28 +279,23 @@ if __name__ == "__main__":
     # --- A. static NTK analysis ---
     empirical_kernel = NTK_empirical(mlp_for_ntk, x_data)
     eigenvalues, eigenvectors = eigen_decomposition(empirical_kernel)
-    vec_list = list(range(10)) + [i*10 for i in range(1, 6)]
-    plot_eigendecay([empirical_kernel], [f'Empirical {ACTIVATION}'],
-                    fig_name=f'eigendecay_w{WIDTH}_n{NUM_SAMPLES}_{ACTIVATION}',
-                    fig_path=f'{SAVE_DIR}/eigendecay_w{WIDTH}_n{NUM_SAMPLES}_{ACTIVATION}',
-                    loglog=False, eigen_num=100)
-    eigenvector_spectrum(eigenvectors, x_data,
-                         vec_list_to_plot=vec_list, theta=theta,
-                         fig_name=f"spectrum_{DATA_OPTION}_{ACTIVATION}")
+    # vec_list = list(range(10)) + [i*10 for i in range(1, 6)]
+    # plot_eigendecay([empirical_kernel], [f'Empirical {ACTIVATION}'],
+    #                 fig_name=f'eigendecay_w{WIDTH}_n{NUM_SAMPLES}_{ACTIVATION}',
+    #                 fig_path=f'{SAVE_DIR}/eigendecay_w{WIDTH}_n{NUM_SAMPLES}_{ACTIVATION}',
+    #                 loglog=True, eigen_num=100)
+    # eigenvector_spectrum(eigenvectors, x_data,
+    #                      vec_list_to_plot=vec_list, theta=theta,
+    #                      fig_name=f"spectrum_{DATA_OPTION}_{ACTIVATION}")
 
     # --- B. dynamic training analysis ---
     y_target = get_target_function(
         x_data, theta, TARGET_OPTION).unsqueeze(1)
 
-    # define a new model to ensure everything is fresh
-    torch.manual_seed(42)
-    np.random.seed(42)
-    mlp_to_train = MLP_General(input_dim=INPUT_DIM, hidden_dim=WIDTH,
-                               activation=ACTIVATION, parameterization=INITIAL)
-
     proj_hist, steps, trained_model, y_pred_hist = train(
-        mlp_to_train, x_data, y_target,
-        eigenvectors, eigenvalues, indices_to_track=[0, 1, 2, 3, 4, 5, 10, 20],
+        mlp_for_ntk, x_data, y_target,
+        eigenvectors, eigenvalues, indices_to_track=[
+            0, 1, 2, 3, 4, 5, 9, 10, 19, 20],
         fig_name=f"train_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}",
         lr=LEARNING_RATE, steps=TRAIN_STEPS
     )
@@ -307,3 +304,25 @@ if __name__ == "__main__":
         x_data, y_target, y_pred_hist, theta, steps, DATA_OPTION, SAVE_DIR)
     analyze_filtering_dynamics(
         x_data.numpy(), y_target.numpy(), y_pred_hist, SAVE_DIR)
+
+    # --- C. linear regression on projection error decay vs. spectral error decay ---
+    # print(DATA_OPTION)
+    # steps = np.array(steps).reshape(-1, 1)
+    # ls_proj = []
+    # for k in [3, 4, 9, 10, 19, 20]:
+    #     X = np.array(proj_hist[k]).reshape(-1, 1)
+    #     reg1 = LinearRegression().fit(steps, X)
+    #     print(f'{k}-th eigvec:', 'coef of projection = ',
+    #           reg1.coef_[0][0], reg1.score(steps, X))
+    #     ls_proj.append(reg1.coef_[0][0])
+
+    # sp_proj = []
+    # for k in [2, 5, 10]:
+    #     y = np.array(relative_err_hist[k]).reshape(-1, 1)
+    #     reg2 = LinearRegression().fit(steps, y)
+    #     print('frequency =', k, 'coef of spectrum = ',
+    #           reg2.coef_[0][0], reg2.score(steps, y))
+    #     sp_proj.append(reg2.coef_[0][0])
+
+    # for i in range(3):
+    #     print((ls_proj[2*i]+ls_proj[2*i+1]) / sp_proj[i])

@@ -2,11 +2,8 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import finufft
-import math
 from typing import Dict, List, Tuple, Any
-import os
 from filtering import normal_kernel, get_freq_low_high
-from utils import plot_diff_distr
 
 
 def analyze_filtering_dynamics(
@@ -57,57 +54,34 @@ def analyze_filtering_dynamics(
             filter_val, lowdiff_history[filter_index], highdiff_history[filter_index], save_dir)
 
 
-def plot_spectral_error_heatmap(
-    relative_error_history: Dict[int, List[float]],
-    step_history: list, save_dir: str,
-    fig_name: str = "spectral_error_dynamics_heatmap.png"
-):
+def plot_diff_distr(filter, lowdiff, highdiff, current_run_path):
     """
-    Plots the relative error dynamics as a heatmap, where each frequency
-    magnitude |k| is a horizontal band.
+    Plot the difference between low and high frequency components of predictions vs. targets.
 
-    Inspired by the 'plot_diff_distr' function provided by the user.
+    Args:
+        filter (float): The filter value used for frequency separation.
+        lowdiff (list): Relative distances for the low frequency component, typically tracked across epochs.
+        highdiff (list): Relative distances for the high frequency component, typically tracked across epochs.
     """
-    # Sort the frequency magnitudes to ensure low-freqs are at the bottom
-    tracking_mags = sorted(relative_error_history.keys())
+    lowdiff = np.array(lowdiff)
+    highdiff = np.array(highdiff)
+    num_epochs = len(lowdiff)
+    epochs = np.arange(1, num_epochs + 1)
 
-    # Create the 2D data matrix: (num_bands, num_steps)
-    error_matrix = np.array([relative_error_history[k]
-                             for k in tracking_mags])
-    num_bands, num_steps = error_matrix.shape
+    plt.figure(figsize=(8, 6))
+    plt.title('Relative Error with Filter {:0.2f}'.format(filter))
 
-    # Check if history and steps match
-    assert num_steps == len(
-        step_history), f'Mismatching in step history ({len(step_history)}) and error history ({num_steps})'
-
-    # --- Plotting ---
-    plt.figure(figsize=(10, num_bands))
-    ax = plt.gca()
-
-    # We use imshow for a clean grid plot.
-    # origin='lower' places the first band (lowest |k|) at the bottom.
-    im = ax.imshow(
-        error_matrix,
-        aspect='auto',
-        origin='lower',
-        # Set extent to match the training steps
-        extent=[step_history[0], step_history[-1], -0.5, num_bands - 0.5],
-        vmin=0.0,
-        vmax=2.0  # Relative error is normalized between 0 and (approx) 1
-    )
-
-    ax.set_xlabel("Training Step")
-    ax.set_ylabel("Frequency Magnitude $|k|$")
-    ax.set_yticks(np.arange(num_bands))
-    ax.set_yticklabels([f"$|k|={mag}$" for mag in tracking_mags])
-    ax.set_xticks(step_history)
-
-    plt.colorbar(im, ax=ax)
-    ax.set_title(f"Relative Error in Frequency Domain")
+    # Plot low-frequency differences against epochs
+    plt.plot(epochs, lowdiff, 'r-', label='low_{:0.2f}'.format(filter))
+    # Plot high-frequency differences against epochs
+    plt.plot(epochs, highdiff, 'b-', label='high_{:0.2f}'.format(filter))
+    plt.legend()
+    plt.xlabel("Training Step")
+    plt.ylabel("Relative Error")
+    plt.xticks(np.arange(0, num_epochs + 1, num_epochs/10))
 
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, fig_name))
-    plt.clf()
+    plt.savefig(current_run_path + '/hot_{:0.2f}.png'.format(filter))
     plt.close()
 
 
@@ -214,8 +188,8 @@ def analyze_spectral_error_dynamics(
             P_pred = pred_freq_map.get(mag_k, 0.0)
 
             # Relative Error: |P_target - P_pred| / P_target
-            relative_error = np.abs(P_target - P_pred) / \
-                (np.abs(P_target) + 1e-10)
+            relative_error = np.abs(P_target - P_pred) / (
+                np.abs(P_target) + 1e-10)
             relative_error_history[mag_k].append(relative_error)
 
     # 4. Plotting
