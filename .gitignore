@@ -23,3 +23,8 @@ nd-runs/
 NLP-runs/
 experiments/
 *.png
+orig_xzq_code/
+
+# other utility code
+*.sh
+experiments_full.py

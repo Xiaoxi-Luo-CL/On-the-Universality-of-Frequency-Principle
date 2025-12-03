@@ -52,7 +52,7 @@ def NTK_analytical_relu(ignore_warning=False, approx_sample=None):
     return kernel
 
 
-def infinite_NTK_approx(activation='relu', ignore_warning=False, num_w=40000):
+def infinite_NTK_approx(activation='relu', x=None, ignore_warning=False, num_w=10000):
     """
     Numerical kernel approximation. Reference: 
     https://papers.nips.cc/paper/2019/file/c4ef9c39b300931b69a36fb3dbb8d60e-Paper.pdf
@@ -62,7 +62,6 @@ def infinite_NTK_approx(activation='relu', ignore_warning=False, num_w=40000):
 
     activation = ['relu', 'sin', 'cos']
     """
-    x = init_inputs(num_inputs=N_SAMPLES)  # (100, 2)
 
     # init kernel and weight
     w1, w2 = np.random.normal(
@@ -165,12 +164,13 @@ if __name__ == "__main__":
     act_map = {'relu': (relu, d_relu), 'sin': (sin, cos), 'cos': (cos, d_cos),
                'sigmoid': (sigmoid, d_sigmoid), 'tanh': (tanh, d_tanh)}
 
+    x = init_inputs(num_inputs=N_SAMPLES)  # (100, 2)
     kernel_analytical = NTK_analytical_relu()
-    kernel_relu = infinite_NTK_approx('relu')
-    kernel_sin = infinite_NTK_approx('sin')
-    kernel_cos = infinite_NTK_approx('cos')
-    kernel_sigmoid = infinite_NTK_approx('sigmoid')
-    kernel_tanh = infinite_NTK_approx('tanh')
+    kernel_relu = infinite_NTK_approx('relu', x)
+    kernel_sin = infinite_NTK_approx('sin', x)
+    kernel_cos = infinite_NTK_approx('cos', x)
+    kernel_sigmoid = infinite_NTK_approx('sigmoid', x)
+    kernel_tanh = infinite_NTK_approx('tanh', x)
     # empirical check with MLP NTK
     emperical_relu = NTK_empirical_mlp(act_func='ReLU')
 

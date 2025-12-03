@@ -9,7 +9,7 @@ from typing import List
 import argparse
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
-from utils import create_save_dir, plot_diff_distr, plot_loss, get_act_func
+from utils import create_save_dir, plot_diff_distr_no_heat, plot_loss, get_act_func
 from filtering import compute_distance_for_training_loader, get_target_freq_distr, get_freq_low_high
 
 
@@ -213,7 +213,8 @@ def main_sampled():
 
     for filter_index, filter in enumerate(filter_dict):
         lowdiff_ind, highdiff_ind = lowdiff[filter_index], highdiff[filter_index]
-        plot_diff_distr(filter, lowdiff_ind, highdiff_ind, current_run_path)
+        plot_diff_distr_no_heat(filter, lowdiff_ind,
+                                highdiff_ind, current_run_path)
 
 
 def main():
@@ -278,7 +279,8 @@ def main():
 
     for filter_index, filter in enumerate(filter_dict):
         lowdiff_ind, highdiff_ind = lowdiff[filter_index], highdiff[filter_index]
-        plot_diff_distr(filter, lowdiff_ind, highdiff_ind, current_run_path)
+        plot_diff_distr_no_heat(filter, lowdiff_ind,
+                                highdiff_ind, current_run_path)
 
 
 if __name__ == "__main__":
@@ -320,4 +322,4 @@ if __name__ == "__main__":
     print('Current run path: ', current_run_path)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    main_sampled()
+    main()

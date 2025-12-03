@@ -11,11 +11,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
-from decompose_NTK import NTK_empirical, plot_eigendecay
+from decompose_NTK import NTK_empirical, plot_eigendecay, infinite_NTK_approx
 from utils import create_save_dir, MLP_General, MLP
 import finufft
 from frequency_func import analyze_spectral_error_dynamics, analyze_filtering_dynamics
-from sklearn.linear_model import LinearRegression
+import copy
 
 
 def init_inputs(num_inputs=200, dim=2, option='uniform'):
@@ -89,6 +89,10 @@ def get_target_function(x_data, theta, type=1):
         y2 = 2.0 * torch.exp(-5.0 * ((x_data[:, 0] - 0.5) **
                                      2 + (x_data[:, 1] - 0.5)**2))
         return (y1 + y2).float()
+    elif type == 4:
+        # f(\theta) = e^{0.5 \cos\theta} + \sin^2\theta + \mathbf{0.1 \sin(15\theta)}$$
+        assert theta is not None, "Theta is required for target func type 4."
+        return torch.exp(0.5 * torch.cos(theta)) + torch.sin(theta)**2 + torch.sin(15 * theta)
     else:
         raise ValueError("Invalid target function type.")
 
@@ -210,11 +214,13 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
     for k in indices_to_track:
         plt.plot(step_history, projection_history[k],
                  label=f"Eigvec {k} (λ={ntk_eigenvalues[k]:.2e})")
-    plt.xlabel("Training Step")
-    plt.ylabel("Projection Length of Residual")
-    plt.title("Training Dynamics Projected onto NTK Eigenbasis")
+    plt.xlabel("Training Step", fontsize=18)
+    plt.ylabel("Projection Length of Residual", fontsize=18)
+    # plt.title("Training Dynamics Projected onto NTK Eigenbasis")
     plt.yscale('log')
-    plt.legend()
+    plt.legend(fontsize=16)
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
     plt.grid(True, which="both", linestyle='--')
     plt.tight_layout()
     plt.savefig(f'{SAVE_DIR}/{fig_name}.png')
@@ -224,7 +230,7 @@ def train(model, x_data, y_target, ntk_eigenvectors, ntk_eigenvalues,
     plt.plot(loss_history, 'k-')
     plt.xlabel("Training Step")
     plt.ylabel("Loss")
-    plt.savefig(f'{SAVE_DIR}/loss_{fig_name}')
+    plt.savefig(f'{SAVE_DIR}/loss{fig_name}.jpg')
     plt.clf()
     return projection_history, step_history, model, y_pred_history
 
@@ -243,7 +249,7 @@ if __name__ == "__main__":
     parser.add_argument('--data_option', type=str, default='uniform',
                         help="Data generation option: 'uniform', 'sphered', 'random', 'clustered'")
     parser.add_argument('--target_func', type=int,
-                        default=1, choices=[1, 2, 3])
+                        default=1, choices=[1, 2, 3, 4])
     parser.add_argument('--lr', type=float, default=1e-4, help="Learning rate")
     parser.add_argument('--steps', type=int, default=20000,
                         help="Training steps")
@@ -268,6 +274,7 @@ if __name__ == "__main__":
     np.random.seed(42)
     mlp_for_ntk = MLP_General(input_dim=INPUT_DIM, hidden_dim=WIDTH,
                               activation=ACTIVATION, parameterization=INITIAL)
+    params_init = copy.deepcopy(dict(mlp_for_ntk.named_parameters()))
 
     # define data and model
     x_data, theta = init_inputs(
@@ -294,35 +301,27 @@ if __name__ == "__main__":
 
     proj_hist, steps, trained_model, y_pred_hist = train(
         mlp_for_ntk, x_data, y_target,
-        eigenvectors, eigenvalues, indices_to_track=[
-            0, 1, 2, 3, 4, 5, 9, 10, 19, 20],
-        fig_name=f"train_{DATA_OPTION}_f{TARGET_OPTION}_{ACTIVATION}",
+        eigenvectors, eigenvalues, indices_to_track=[0, 1, 2, 3, 4, 10, 20],
+        fig_name=f"train{file_name}",
         lr=LEARNING_RATE, steps=TRAIN_STEPS
     )
 
     analyze_spectral_error_dynamics(
-        x_data, y_target, y_pred_hist, theta, steps, DATA_OPTION, SAVE_DIR)
+        x_data, y_target, y_pred_hist, theta, steps, DATA_OPTION,
+        SAVE_DIR, file_name)
     analyze_filtering_dynamics(
         x_data.numpy(), y_target.numpy(), y_pred_hist, SAVE_DIR)
 
-    # --- C. linear regression on projection error decay vs. spectral error decay ---
-    # print(DATA_OPTION)
-    # steps = np.array(steps).reshape(-1, 1)
-    # ls_proj = []
-    # for k in [3, 4, 9, 10, 19, 20]:
-    #     X = np.array(proj_hist[k]).reshape(-1, 1)
-    #     reg1 = LinearRegression().fit(steps, X)
-    #     print(f'{k}-th eigvec:', 'coef of projection = ',
-    #           reg1.coef_[0][0], reg1.score(steps, X))
-    #     ls_proj.append(reg1.coef_[0][0])
+    params_final = dict(trained_model.named_parameters())
 
-    # sp_proj = []
-    # for k in [2, 5, 10]:
-    #     y = np.array(relative_err_hist[k]).reshape(-1, 1)
-    #     reg2 = LinearRegression().fit(steps, y)
-    #     print('frequency =', k, 'coef of spectrum = ',
-    #           reg2.coef_[0][0], reg2.score(steps, y))
-    #     sp_proj.append(reg2.coef_[0][0])
+    relative_changes = {}
 
-    # for i in range(3):
-    #     print((ls_proj[2*i]+ls_proj[2*i+1]) / sp_proj[i])
+    for name in params_init:
+        w0 = params_init[name]
+        w1 = params_final[name].detach()
+        diff = torch.norm(w1 - w0)
+        base = torch.norm(w0)
+        relative_changes[name] = (diff / (base + 1e-10)).item()
+
+    for k, v in relative_changes.items():
+        print(f"{k}: relative change = {v:.6e}")

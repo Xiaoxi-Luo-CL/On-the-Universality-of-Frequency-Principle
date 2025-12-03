@@ -143,6 +143,29 @@ def plot_diff_distr(filter, lowdiff, highdiff, current_run_path):
     plt.close()
 
 
+def plot_diff_distr_no_heat(filter, lowdiff, highdiff, current_run_path):
+    lowdiff = np.array(lowdiff)
+    highdiff = np.array(highdiff)
+    num_epochs = len(lowdiff)
+    epochs = np.arange(1, num_epochs + 1)
+
+    plt.figure(figsize=(8, 6))
+    plt.title('Relative Error with Filter {:0.2f}'.format(filter))
+
+    # Plot low-frequency differences against epochs
+    plt.plot(epochs, lowdiff, 'r-', label='low_{:0.2f}'.format(filter))
+    # Plot high-frequency differences against epochs
+    plt.plot(epochs, highdiff, 'b-', label='high_{:0.2f}'.format(filter))
+    plt.legend()
+    plt.xlabel("Training Step")
+    plt.ylabel("Relative Error")
+    plt.xticks(np.arange(0, num_epochs + 1, 20))
+
+    plt.tight_layout()
+    plt.savefig(current_run_path + '/hot_{:0.2f}.png'.format(filter))
+    plt.close()
+
+
 def plot_loss(path, loss_train, x_log=False):
     """
     path (str): path.

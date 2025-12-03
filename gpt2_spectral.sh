@@ -14,8 +14,16 @@
 echo "spectral bias"
 for data_option in uniform sphered random clustered
 do
-    for target_func in 1 2 3
+    for target_func in 2 3
     do
-        /u501/x25luo/.conda/envs/spectral/bin/python experiments.py --lr 0.0002 --data_option ${data_option} --target_func ${target_func} --steps 20000 
+        /u501/x25luo/.conda/envs/spectral/bin/python experiments.py --lr 0.5 --data_option ${data_option} --target_func ${target_func} --steps 50000 --initialization mf
+    done
+done
+
+for data_option in uniform sphered
+do
+    for target_func in 1
+    do
+        /u501/x25luo/.conda/envs/spectral/bin/python experiments.py --lr 0.5 --data_option ${data_option} --target_func ${target_func} --steps 50000 
     done
 done

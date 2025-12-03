@@ -23,7 +23,7 @@ def analyze_filtering_dynamics(
         np.sum(x_data**2, axis=1)[:, np.newaxis]
 
     # Define filter parameters (matching the 1d-runs example)
-    filter_start, filter_end = 0.1, 10
+    filter_start, filter_end = 0.01, 10
     filter_num = 10
 
     # filter_dict = np.linspace(filter_start, filter_end, num=filter_num)
@@ -156,7 +156,7 @@ def _calculate_nufft_spectrum(y_values: np.ndarray, x_data: torch.Tensor,
 def analyze_spectral_error_dynamics(
     x_data: torch.Tensor, y_target: torch.Tensor,
     y_pred_history: List[np.ndarray], theta: torch.Tensor | None,
-    steps: list, data_option: str, save_dir: str
+    steps: list, data_option: str, save_dir: str, file_name=None
 ):
     """Analyzes relative error in frequency domain during training"""
     # target spectrum (ground truth)
@@ -198,11 +198,18 @@ def analyze_spectral_error_dynamics(
         plt.plot(steps, relative_error_history[mag_k],
                  label=f"$|k|={mag_k}$")
 
-    plt.xlabel("Training Step")
-    plt.ylabel("Relative Error ($|P_{target} - P_{pred}| / P_{target}$)")
-    plt.title(f"Spectral Bias: Relative Error ({data_option})")
+    plt.xlabel("Training Step", fontsize=18)
+    plt.ylabel(
+        "Relative Error ($|P_{target} - P_{pred}| / P_{target}$)", fontsize=18)
+    # plt.title(f"Spectral Bias: Relative Error ({data_option})")
     plt.yscale('log')
-    plt.legend(title="Frequency Magnitude $|k|$")
+    plt.legend(fontsize=16)
+    plt.labelsize = 16
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
     plt.grid(True, which="both", linestyle='--')
-    plt.savefig(f'{save_dir}/spectral_error_dynamics.png')
+    if file_name is not None:
+        plt.savefig(f'{save_dir}/sp{file_name}.png')
+    else:
+        plt.savefig(f'{save_dir}/spectral_error_dynamics.png')
     plt.clf()

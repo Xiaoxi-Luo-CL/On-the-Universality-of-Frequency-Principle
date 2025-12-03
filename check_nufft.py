@@ -3,7 +3,6 @@
 
 """
 Standalone script to validate the accuracy of 2D Non-Uniform FFT (FINUFFT).
-(Version 4: Complete and Corrected)
 """
 import numpy as np
 import matplotlib.pyplot as plt
