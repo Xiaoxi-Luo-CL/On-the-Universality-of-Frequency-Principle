@@ -30,7 +30,7 @@ Other code:
 + `reproduce_NTK.py`: Reproduce results in Cao et al. (2020), Section 5.
 + `fprinciple-1d.py`: Experiments to verify Frequency Principle with 1D data, re-written from https://github.com/xuzhiqin1990/dnn_simple_experiments/tree/main/frequency_principle.
 + `fprinciple-nd.py`: Experiments to verify Frequency Principle with digh-dimensional data (CIFAR image classification), re-written from https://github.com/xuzhiqin1990/dnn_simple_experiments/tree/main/frequency_principle.
-+ `decompose_NTK.py`: Eigen-decompose empirical NTK matrix. Reference: https://github.com/genglinliu/NTK-study/tree/main.
++ `decompose_NTK.py`: Eigen-decompose empirical NTK matrix. Referred to https://github.com/genglinliu/NTK-study/tree/main.
 + `check_nufft.py`: compare the original signal and the decomposed results by NUDFT.
 
 ## Reference
